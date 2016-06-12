@@ -12,6 +12,9 @@
 
 #define MSG_PUB_THIN_BLOCK "BLOCK_THIN"
 
+#define MSG_CMD_LEN 20
+#define MSG_CMD_GET_TXS "get_txs"
+
 
 class NodePeer;
 class TxRepo;
@@ -28,10 +31,14 @@ class NodePeer {
   string reqAddr_;
 
   NodeBoost *nodeBoost_;
+  TxRepo *txRepo_;
+
+  CBlock buildBlock(const string &thinBlock);
 
 public:
   NodePeer(const string &subAddr, const string &reqAddr,
-           zmq::context_t *zmqContext, NodeBoost *nodeBoost);
+           zmq::context_t *zmqContext, NodeBoost *nodeBoost,
+           TxRepo *txRepo);
   ~NodePeer();
 
   bool isFinish();
@@ -46,8 +53,10 @@ class TxRepo {
   std::map<uint256, CTransaction> txsPool_;
 
 public:
-  TxRepo() {}
+  TxRepo();
+  ~TxRepo();
 
+  bool isExist(const uint256 &hash);
   bool getTx(const uint256 &hash, CTransaction &tx);
   void AddTx(const CTransaction &tx);
 };
@@ -63,23 +72,34 @@ class NodeBoost {
 
   string zmqPubAddr_;
   string zmqRepAddr_;
+  string zmqBitcoind_;
 
   TxRepo *txRepo_;
 
   std::set<NodePeer *> peers_;
 
-  void peerConnect(const string &subAddr, const string &reqAddr);
   void peerCloseAll();
 
   void threadZmqPublish();
   void threadZmqResponse();
+  void threadListenBitcoind();
+
+  void threadPeerConnect(const string &subAddr, const string &reqAddr);
+
+  void buildRepGetTxs(const zmq::message_t &zin, zmq::message_t &zout);
 
 public:
-  NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr, TxRepo *txRepo);
+  NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr,
+            const string &zmqBitcoind,
+            TxRepo *txRepo);
   ~NodeBoost();
+
+  void peerConnect(const string &subAddr, const string &reqAddr);
+
+  void findMissingTxs(const string &thinBlock, vector<uint256> &missingTxs);
 
   void run();
   void stop();
-  void submitBlock(const string &block);
+  void submitBlock(const CBlock &block);
 };
 

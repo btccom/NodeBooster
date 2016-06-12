@@ -14,17 +14,85 @@
 using namespace std;
 using namespace libconfig;
 
-//  Receive 0MQ string from socket and convert into string
-static std::string
-s_recv (zmq::socket_t & socket) {
+NodeBoost *gNodeBoost = nullptr;
 
-  zmq::message_t message;
-  socket.recv(&message);
+void handler(int sig) {
+  if (gNodeBoost) {
+    gNodeBoost->stop();
+  }
+}
 
-  return std::string(static_cast<char*>(message.data()), message.size());
+void usage() {
+  fprintf(stderr, "Usage:\n\tnodeboost -c \"nodeboost.cfg\" -l \"log_dir\"\n");
 }
 
 int main(int argc, char **argv) {
+  char *optLogDir = NULL;
+  char *optConf   = NULL;
+  int c;
+
+  if (argc <= 1) {
+    usage();
+    return 1;
+  }
+  while ((c = getopt(argc, argv, "c:l:h")) != -1) {
+    switch (c) {
+      case 'c':
+        optConf = optarg;
+        break;
+      case 'l':
+        optLogDir = optarg;
+        break;
+      case 'h': default:
+        usage();
+        exit(0);
+    }
+  }
+
+  // Initialize Google's logging library.
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_log_dir = string(optLogDir);
+  FLAGS_logbuflevel = -1;
+
+  // Read the file. If there is an error, report it and exit.
+  Config cfg;
+  try
+  {
+    cfg.readFile(optConf);
+  } catch(const FileIOException &fioex) {
+    std::cerr << "I/O error while reading file." << std::endl;
+    return(EXIT_FAILURE);
+  } catch(const ParseException &pex) {
+    std::cerr << "Parse error at " << pex.getFile() << ":" << pex.getLine()
+    << " - " << pex.getError() << std::endl;
+    return(EXIT_FAILURE);
+  }
+
+  TxRepo txrepo;
+  gNodeBoost = new NodeBoost(cfg.lookup("server.publish_addr"),
+                             cfg.lookup("server.response_addr"),
+                             cfg.lookup("bitcoind.sub_addr"),
+                             &txrepo);
+
+  // connect peers
+  {
+    const Setting &peers = cfg.lookup("peers");
+    for (int i = 0; i < peers.getLength(); i++) {
+      string subAddr, reqAddr;
+      peers[i].lookupValue("publish_addr",  subAddr);
+      peers[i].lookupValue("response_addr", reqAddr);
+      gNodeBoost->peerConnect(subAddr, reqAddr);
+    }
+  }
+
+  gNodeBoost->run();
+
+  return 0;
+}
+
+
+
+int main1(int argc, char **argv) {
   // Initialize Google's logging library.
   google::InitGoogleLogging(argv[0]);
   FLAGS_log_dir = "./log";
@@ -65,7 +133,7 @@ int main(int argc, char **argv) {
 
     if (type == "rawtx") {
       CTransaction tx;
-      DecodeHexTx(tx, (const unsigned char *)content.data(), content.length());
+      DecodeBinTx(tx, (const unsigned char *)content.data(), content.length());
       cout << "tx: " << tx.GetHash().ToString() << endl << EncodeHexTx(tx) << endl;
     }
 //    std::cout << "[" << type << "]: " << content << std::endl;
