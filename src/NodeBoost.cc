@@ -5,6 +5,11 @@
 
 #include "bitcoin/util.h"
 
+uint256 getHashFromThinBlock(const string &thinBlock) {
+  CBlockHeader header;
+  memcpy((uint8_t *)&header, thinBlock.data(), sizeof(CBlockHeader));
+  return header.GetHash();
+}
 
 /////////////////////////////////// NodePeer ///////////////////////////////////
 NodePeer::NodePeer(const string &subAddr, const string &reqAddr,
@@ -51,13 +56,13 @@ bool NodePeer::isFinish() {
 
 static void _sendMissingTxs(zmq::socket_t *socket, const vector<uint256> &missingTxs) {
   zmq::message_t zmsg;
-  zmsg.rebuild(MSG_CMD_LEN + missingTxs.size() * 64);
+  zmsg.rebuild(MSG_CMD_LEN + missingTxs.size() * 32);
 
   memset((char *)zmsg.data(), 0, MSG_CMD_LEN);
   sprintf((char *)zmsg.data(), "%s", MSG_CMD_GET_TXS);
 
   memcpy((unsigned char *)zmsg.data() + MSG_CMD_LEN,
-         missingTxs.data(), missingTxs.size() * 64);
+         missingTxs.data(), missingTxs.size() * 32);
   socket->send(zmsg);
 }
 
@@ -79,28 +84,30 @@ static void _recvMissingTxs(zmq::socket_t *socket, TxRepo *txrepo) {
   }
 }
 
-CBlock NodePeer::buildBlock(const string &thinBlock) {
-  const size_t txCnt = (thinBlock.size() - sizeof(CBlockHeader)) / 64;
+bool NodePeer::buildBlock(const string &thinBlock, CBlock &block) {
+  const size_t txCnt = (thinBlock.size() - sizeof(CBlockHeader)) / 32;
   unsigned char *p = (unsigned char *)thinBlock.data() + sizeof(CBlockHeader);
 
   CBlockHeader header;
   memcpy((uint8_t *)&header, thinBlock.data(), sizeof(CBlockHeader));
 
-  CBlock block(header);
+  block.SetNull();
+  block = header;
 
   // txs
   for (size_t i = 0; i < txCnt; i++) {
-    std::vector<unsigned char> vch(p, p + 64);
-    p += 64;
+    std::vector<unsigned char> vch(p, p + 32);
+    p += 32;
 
     uint256 hash(vch);
     CTransaction tx;
     if (!txRepo_->getTx(hash, tx)) {
       LOG(FATAL) << "missing tx when build block, tx: " << hash.ToString();
+      return false;
     }
     block.vtx.push_back(tx);
   }
-  return block;
+  return true;
 }
 
 void NodePeer::run() {
@@ -112,10 +119,14 @@ void NodePeer::run() {
 
     // MSG_PUB_THIN_BLOCK
     if (type == MSG_PUB_THIN_BLOCK) {
+      LOG(INFO) << "received thin block, size: " << content.size()
+      << ", hash: " << getHashFromThinBlock(content).ToString();
+
       vector<uint256> missingTxs;
       nodeBoost_->findMissingTxs(content, missingTxs);
 
       if (missingTxs.size()) {
+        LOG(INFO) << "request 'get_txs', missing tx count: " << missingTxs.size();
         // send cmd: "get_txs"
         _sendMissingTxs(zmqReq_, missingTxs);
 
@@ -124,8 +135,14 @@ void NodePeer::run() {
       }
 
       // submit block
-      CBlock block = buildBlock(content);
-      nodeBoost_->submitBlock(block);
+      CBlock block;
+      if (buildBlock(content, block)) {
+        nodeBoost_->submitBlock(block);
+      } else {
+        string hex;
+        Bin2Hex((uint8 *)content.data(), content.size(), hex);
+        LOG(ERROR) << "build block failure, hex: " << hex;
+      }
     }
 
     // TODO: handle message
@@ -218,11 +235,11 @@ void NodeBoost::findMissingTxs(const string &thinBlock,
 
   uint8_t *p = (uint8_t *)thinBlock.data() + kHeaderSize;
   uint8_t *e = (uint8_t *)thinBlock.data() + thinBlock.size();
-  assert((e - p) % 64 == 0);
+  assert((e - p) % 32 == 0);
 
   while (p < e) {
-    std::vector<unsigned char> vch(p, p + 64);
-    p += 64;
+    std::vector<unsigned char> vch(p, p + 32);
+    p += 32;
 
     uint256 hash(vch);
     LOG(INFO) << "check tx: " << hash.ToString();
@@ -245,14 +262,14 @@ void NodeBoost::threadZmqPublish() {
 void NodeBoost::buildRepGetTxs(const zmq::message_t &zin, zmq::message_t &zout) {
   unsigned char *p = (unsigned char *)zin.data() + MSG_CMD_LEN;
   unsigned char *e = (unsigned char *)zin.data() + zin.size();
-  assert((e - p) % 64 == 0);
+  assert((e - p) % 32 == 0);
 
   zmq::message_t ztmp(4*1024*1024);  // 4MB, TODO: resize in the future
   uint8_t *data = (uint8_t *)ztmp.data();
 
   while (p < e) {
-    std::vector<unsigned char> vch(p, p + 64);
-    p += 64;
+    std::vector<unsigned char> vch(p, p + 32);
+    p += 32;
 
     uint256 hash(vch);
     CTransaction tx;
@@ -306,7 +323,7 @@ static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
   const size_t kHeaderSize = 80;
   assert(kHeaderSize == sizeof(CBlockHeader));
 
-  zmsg.rebuild(kHeaderSize + block.vtx.size() * 64);
+  zmsg.rebuild(kHeaderSize + block.vtx.size() * 32);
   unsigned char *p = (unsigned char *)zmsg.data();
 
   CBlockHeader header = block.GetBlockHeader();
@@ -315,9 +332,13 @@ static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
 
   for (size_t i = 0; i < block.vtx.size(); i++) {
     uint256 hash = block.vtx[i].GetHash();
-    memcpy(p, hash.begin(), 64);
-    p += 64;
+    memcpy(p, hash.begin(), 32);
+    p += 32;
   }
+
+  string hex;
+  Bin2Hex((const uint8 *)zmsg.data(), zmsg.size(), hex);
+  LOG(INFO) << "hex: " << hex;
 }
 
 void NodeBoost::threadListenBitcoind() {
@@ -347,6 +368,7 @@ void NodeBoost::threadListenBitcoind() {
     }
 
     // publish message
+    LOG(INFO) << "broadcast thin block: " << block.GetHash().ToString();
     // type
     s_sendmore(*zmqPub_, MSG_PUB_THIN_BLOCK);
     // content
@@ -376,6 +398,7 @@ void NodeBoost::threadListenBitcoind() {
       }
 
       // publish message
+      LOG(INFO) << "broadcast thin block: " << block.GetHash().ToString();
       // type
       s_sendmore(*zmqPub_, MSG_PUB_THIN_BLOCK);
       // content

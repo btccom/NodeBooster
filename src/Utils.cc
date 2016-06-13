@@ -3,6 +3,85 @@
 
 #include "bitcoin/util.h"
 
+static const char _hexchars[] = "0123456789abcdef";
+
+static inline int _hex2bin_char(const char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return (c - 'a') + 10;
+  if (c >= 'A' && c <= 'F')
+    return (c - 'A') + 10;
+  return -1;
+}
+
+bool Hex2Bin(const char *in, size_t size, vector<char> &out) {
+  out.clear();
+  out.reserve(size/2);
+
+  uint8 h, l;
+  // skip space, 0x
+  const char *psz = in;
+  while (isspace(*psz))
+    psz++;
+  if (psz[0] == '0' && tolower(psz[1]) == 'x')
+    psz += 2;
+
+  // convert
+  while (psz + 2 <= (char *)in + size) {
+    h = _hex2bin_char(*psz++);
+    l = _hex2bin_char(*psz++);
+    out.push_back((h << 4) | l);
+  }
+  return true;
+
+}
+
+bool Hex2Bin(const char *in, vector<char> &out) {
+  out.clear();
+  out.reserve(strlen(in)/2);
+
+  uint8 h, l;
+  // skip space, 0x
+  const char *psz = in;
+  while (isspace(*psz))
+    psz++;
+  if (psz[0] == '0' && tolower(psz[1]) == 'x')
+    psz += 2;
+
+  if (strlen(psz) % 2 == 1) { return false; }
+
+  // convert
+  while (*psz != '\0' && *(psz + 1) != '\0') {
+    h = _hex2bin_char(*psz++);
+    l = _hex2bin_char(*psz++);
+    out.push_back((h << 4) | l);
+  }
+  return true;
+}
+
+void Bin2Hex(const uint8 *in, size_t len, string &str) {
+  str.clear();
+  const uint8 *p = in;
+  while (len--) {
+    str.push_back(_hexchars[p[0] >> 4]);
+    str.push_back(_hexchars[p[0] & 0xf]);
+    ++p;
+  }
+}
+
+void Bin2Hex(const vector<char> &in, string &str) {
+  Bin2Hex((uint8 *)in.data(), in.size(), str);
+}
+
+void Bin2HexR(const vector<char> &in, string &str) {
+  vector<char> r;
+  for (auto it = in.rbegin(); it != in.rend(); ++it) {
+    r.push_back(*it);
+  }
+  Bin2Hex(r, str);
+}
+
 string EncodeHexTx(const CTransaction& tx) {
   CDataStream ssTx(SER_NETWORK, BITCOIN_PROTOCOL_VERSION);
   ssTx << tx;

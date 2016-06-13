@@ -20,7 +20,6 @@ class NodePeer;
 class TxRepo;
 class NodeBoost;
 
-
 /////////////////////////////////// NodePeer ///////////////////////////////////
 class NodePeer {
   atomic<bool> running_;
@@ -33,7 +32,7 @@ class NodePeer {
   NodeBoost *nodeBoost_;
   TxRepo *txRepo_;
 
-  CBlock buildBlock(const string &thinBlock);
+  bool buildBlock(const string &thinBlock, CBlock &block);
 
 public:
   NodePeer(const string &subAddr, const string &reqAddr,
