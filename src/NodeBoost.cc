@@ -77,8 +77,7 @@ bool NodePeer::isFinish() {
   return false;
 }
 
-
-static void _sendMissingTxs(zmq::socket_t *socket, const vector<uint256> &missingTxs) {
+void NodePeer::sendMissingTxs(const vector<uint256> &missingTxs) {
   zmq::message_t zmsg;
   zmsg.rebuild(MSG_CMD_LEN + missingTxs.size() * 32);
 
@@ -87,24 +86,26 @@ static void _sendMissingTxs(zmq::socket_t *socket, const vector<uint256> &missin
 
   memcpy((unsigned char *)zmsg.data() + MSG_CMD_LEN,
          missingTxs.data(), missingTxs.size() * 32);
-  socket->send(zmsg);
+  zmqReq_->send(zmsg);
 }
 
-static void _recvMissingTxs(zmq::socket_t *socket, TxRepo *txrepo) {
+void NodePeer::recvMissingTxs() {
   zmq::message_t zmsg;
-  socket->recv(&zmsg);
+  zmqReq_->recv(&zmsg);
 
   unsigned char *p = (unsigned char *)zmsg.data();
   unsigned char *e = (unsigned char *)zmsg.data() + zmsg.size();
   while (p < e) {
-    int32_t txlen = *(int32_t *)p;
+    // size
+    const int32_t txlen = *(int32_t *)p;
     p += sizeof(int32_t);
 
+    // tx content
     CTransaction tx;
     DecodeBinTx(tx, p, txlen);
     p += txlen;
 
-    txrepo->AddTx(tx);
+    txRepo_->AddTx(tx);
   }
 }
 
@@ -142,25 +143,26 @@ void NodePeer::run() {
     string content = s_recv(*zmqSub_);
 
     // MSG_PUB_THIN_BLOCK
-    if (type == MSG_PUB_THIN_BLOCK) {
+    if (type == MSG_PUB_THIN_BLOCK)
+    {
+      const uint256 blkhash = getHashFromThinBlock(content);
       LOG(INFO) << "received thin block, size: " << content.size()
-      << ", hash: " << getHashFromThinBlock(content).ToString();
+      << ", hash: " << blkhash.ToString();
 
       vector<uint256> missingTxs;
       nodeBoost_->findMissingTxs(content, missingTxs);
 
-      if (missingTxs.size()) {
+      if (missingTxs.size() > 0) {
         LOG(INFO) << "request 'get_txs', missing tx count: " << missingTxs.size();
         // send cmd: "get_txs"
-        _sendMissingTxs(zmqReq_, missingTxs);
-
-        // handle txs
-        _recvMissingTxs(zmqReq_, txRepo_);
+        sendMissingTxs(missingTxs);
+        recvMissingTxs();
       }
 
       // submit block
       CBlock block;
       if (buildBlock(content, block)) {
+        assert(blkhash == block.GetHash());
         nodeBoost_->submitBlock(block);
       } else {
         string hex;
@@ -168,17 +170,12 @@ void NodePeer::run() {
         LOG(ERROR) << "build block failure, hex: " << hex;
       }
     }
+    else
+    {
+      LOG(ERROR) << "unknown message type: " << type;
+    }
 
-    // TODO: handle message
-
-//    // req
-//    s_send(*zmqReq_, "hello");
-//    string smsg = s_recv(*zmqReq_);
-//    LOG(INFO) << "[req, " << reqAddr_ << "] recv: " << smsg;
-//
-//    string block(smsg);
-//    nodeBoost_->submitBlock(block);
-  }
+  } /* /while */
 }
 
 

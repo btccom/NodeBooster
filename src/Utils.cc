@@ -25,6 +25,9 @@
 
 #include "bitcoin/util.h"
 
+#include <curl/curl.h>
+#include <glog/logging.h>
+
 static const char _hexchars[] = "0123456789abcdef";
 
 static inline int _hex2bin_char(const char c) {
@@ -192,4 +195,90 @@ bool s_sendmore (zmq::socket_t & socket, const std::string & string) {
 
   bool rc = socket.send(message, ZMQ_SNDMORE);
   return (rc);
+}
+
+
+
+struct CurlChunk {
+  char *memory;
+  size_t size;
+};
+
+static size_t
+CurlWriteChunkCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+  size_t realsize = size * nmemb;
+  struct CurlChunk *mem = (struct CurlChunk *)userp;
+
+  mem->memory = (char *)realloc(mem->memory, mem->size + realsize + 1);
+  if(mem->memory == NULL) {
+    /* out of memory! */
+    printf("not enough memory (realloc returned NULL)\n");
+    return 0;
+  }
+
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+
+  return realsize;
+}
+
+bool bitcoindRpcCall(const char *url, const char *userpwd, const char *reqData,
+                     string &response) {
+  struct curl_slist *headers = NULL;
+  CURLcode status;
+  long code;
+  CURL *curl = curl_easy_init();
+  struct CurlChunk chunk;
+  if (!curl) {
+    return false;
+  }
+
+  chunk.memory = (char *)malloc(1);  /* will be grown as needed by the realloc above */
+  chunk.size   = 0;          /* no data at this point */
+
+  headers = curl_slist_append(headers, "content-type: text/plain;");
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(reqData));
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS,    reqData);
+
+  curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd);
+  curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_TRY);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "NodeBooster/0.1");
+
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteChunkCallback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA,     (void *)&chunk);
+
+  status = curl_easy_perform(curl);
+  if (status != 0) {
+    LOG(ERROR) << "unable to request data from: " << url << ", error: " << curl_easy_strerror(status);
+    goto error;
+  }
+
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+  if (code != 200) {
+    LOG(ERROR) << "server responded with code: " << code;
+    goto error;
+  }
+
+  response.assign(chunk.memory, chunk.size);
+
+  curl_easy_cleanup(curl);
+  curl_slist_free_all(headers);
+  free(chunk.memory);
+  return true;
+
+
+error:
+  if (curl)
+    curl_easy_cleanup(curl);
+  if (headers)
+    curl_slist_free_all(headers);
+
+  free(chunk.memory);
+  return false;
 }

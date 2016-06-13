@@ -53,6 +53,9 @@ class NodePeer {
   NodeBoost *nodeBoost_;
   TxRepo *txRepo_;
 
+  void sendMissingTxs(const vector<uint256> &missingTxs);
+  void recvMissingTxs();
+
   bool buildBlock(const string &thinBlock, CBlock &block);
 
 public:

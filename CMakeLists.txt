@@ -41,6 +41,11 @@ if(NOT LIBZMQ_FOUND)
   message(FATAL_ERROR "libzmq not found!")
 endif(NOT LIBZMQ_FOUND)
 
+find_package(CURL)
+if(NOT CURL_FOUND)
+  message(FATAL_ERROR "libcurl not found!")
+endif(NOT CURL_FOUND)
+
 find_package(Boost 1.36.0 COMPONENTS thread filesystem system regex)
 if(NOT Boost_FOUND)
   message(FATAL_ERROR "Boost not found!")
@@ -54,8 +59,8 @@ add_library(libnodeboost STATIC ${LIB_SOURCES})
 
 file(GLOB_RECURSE TEST_SOURCES test/*.cc)
 add_executable(unittest ${TEST_SOURCES})
-target_link_libraries(unittest libnodeboost ${OPENSSL_CRYPTO_LIBRARY} ${OPENSSL_SSL_LIBRARY} ${Boost_LIBRARIES} ${LIBCONFIGPP_LIBRARY} ${LIBZMQ_LIBRARIES} ${GLOG_LIBRARIES} ${THRID_LIBRARIES})
+target_link_libraries(unittest libnodeboost ${OPENSSL_CRYPTO_LIBRARY} ${OPENSSL_SSL_LIBRARY} ${Boost_LIBRARIES} ${LIBCONFIGPP_LIBRARY} ${LIBZMQ_LIBRARIES} ${GLOG_LIBRARIES} ${CURL_LIBRARIES} ${THRID_LIBRARIES})
 
 file(GLOB_RECURSE NODEBOOST_SOURCES src/nodeboost/*.cc)
 add_executable(nodeboost ${NODEBOOST_SOURCES})
-target_link_libraries(nodeboost libnodeboost ${OPENSSL_CRYPTO_LIBRARY} ${OPENSSL_SSL_LIBRARY} ${Boost_LIBRARIES} ${LIBCONFIGPP_LIBRARY} ${LIBZMQ_LIBRARIES} ${GLOG_LIBRARIES} ${THRID_LIBRARIES})
+target_link_libraries(nodeboost libnodeboost ${OPENSSL_CRYPTO_LIBRARY} ${OPENSSL_SSL_LIBRARY} ${Boost_LIBRARIES} ${LIBCONFIGPP_LIBRARY} ${LIBZMQ_LIBRARIES} ${GLOG_LIBRARIES} ${CURL_LIBRARIES} ${THRID_LIBRARIES})

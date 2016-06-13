@@ -51,3 +51,4 @@ bool DecodeBinBlk(CBlock& block, const unsigned char *data, size_t len);
 std::string s_recv(zmq::socket_t & socket);
 bool s_send(zmq::socket_t & socket, const std::string & string);
 bool s_sendmore (zmq::socket_t & socket, const std::string & string);
+
