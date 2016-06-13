@@ -97,6 +97,9 @@ class NodeBoost {
   string zmqRepAddr_;
   string zmqBitcoind_;
 
+  string bitcoindRpcAddr_;
+  string bitcoindRpcUserpass_;
+
   TxRepo *txRepo_;
 
   std::set<NodePeer *> peers_;
@@ -107,13 +110,15 @@ class NodeBoost {
   void threadZmqResponse();
   void threadListenBitcoind();
 
-  void threadPeerConnect(const string &subAddr, const string &reqAddr);
+  void threadPeerConnect(const string subAddr, const string reqAddr);
+  void threadSubmitBlock(const string bitcoindRpcAddr, const string bitcoindRpcUserpass, const string blockHex);
 
   void buildRepGetTxs(const zmq::message_t &zin, zmq::message_t &zout);
 
 public:
   NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr,
             const string &zmqBitcoind,
+            const string &bitcoindRpcAddr, const string &bitcoindRpcUserpass,
             TxRepo *txRepo);
   ~NodeBoost();
 

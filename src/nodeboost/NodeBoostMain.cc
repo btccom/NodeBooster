@@ -95,6 +95,8 @@ int main(int argc, char **argv) {
   gNodeBoost = new NodeBoost(cfg.lookup("server.publish_addr"),
                              cfg.lookup("server.response_addr"),
                              cfg.lookup("bitcoind.sub_addr"),
+                             cfg.lookup("bitcoind.rpc_addr"),
+                             cfg.lookup("bitcoind.rpc_userpwd"),
                              &txrepo);
 
   // connect peers

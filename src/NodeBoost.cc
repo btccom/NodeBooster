@@ -201,7 +201,7 @@ void TxRepo::AddTx(const CTransaction &tx) {
     return;
   }
   txsPool_.insert(std::make_pair(hash, tx));
-  LOG(INFO) << "tx repo add tx: " << hash.ToString();
+//  LOG(INFO) << "tx repo add tx: " << hash.ToString();
 }
 
 bool TxRepo::getTx(const uint256 &hash, CTransaction &tx) {
@@ -219,9 +219,11 @@ bool TxRepo::getTx(const uint256 &hash, CTransaction &tx) {
 //////////////////////////////////// NodeBoost ////////////////////////////////////
 NodeBoost::NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr,
                      const string &zmqBitcoind,
+                     const string &bitcoindRpcAddr, const string &bitcoindRpcUserpass,
                      TxRepo *txRepo)
 : zmqContext_(2/*i/o threads*/),
-txRepo_(txRepo), zmqPubAddr_(zmqPubAddr), zmqRepAddr_(zmqRepAddr), zmqBitcoind_(zmqBitcoind)
+txRepo_(txRepo), zmqPubAddr_(zmqPubAddr), zmqRepAddr_(zmqRepAddr), zmqBitcoind_(zmqBitcoind),
+bitcoindRpcAddr_(bitcoindRpcAddr), bitcoindRpcUserpass_(bitcoindRpcUserpass)
 {
   // publisher
   zmqPub_ = new zmq::socket_t(zmqContext_, ZMQ_PUB);
@@ -359,7 +361,6 @@ static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
 
   string hex;
   Bin2Hex((const uint8 *)zmsg.data(), zmsg.size(), hex);
-  LOG(INFO) << "hex: " << hex;
 }
 
 void NodeBoost::threadListenBitcoind() {
@@ -384,9 +385,11 @@ void NodeBoost::threadListenBitcoind() {
     }
     for (auto tx : block.vtx) {
       CTransaction tx2;
-      assert(txRepo_->getTx(tx.GetHash(), tx2) == true);
+      txRepo_->getTx(tx.GetHash(), tx2);
       assert(tx2.GetHash() == tx.GetHash());
     }
+
+    submitBlock(block);  // for test submit block
 
     // publish message
     LOG(INFO) << "broadcast thin block: " << block.GetHash().ToString();
@@ -448,7 +451,7 @@ void NodeBoost::peerConnect(const string &subAddr, const string &reqAddr) {
   boost::thread t(boost::bind(&NodeBoost::threadPeerConnect,  this, subAddr, reqAddr));
 }
 
-void NodeBoost::threadPeerConnect(const string &subAddr, const string &reqAddr) {
+void NodeBoost::threadPeerConnect(const string subAddr, const string reqAddr) {
   if (running_ == false) {
     LOG(WARNING) << "server has stopped, ignore to connect peer: " << subAddr << ", " << reqAddr;
     return;
@@ -475,9 +478,30 @@ void NodeBoost::peerCloseAll() {
   }
 }
 
+void NodeBoost::threadSubmitBlock(const string bitcoindRpcAddr,
+                                  const string bitcoindRpcUserpass,
+                                  const string blockHex) {
+  string req;
+  req += "{\"jsonrpc\":\"1.0\",\"id\":\"1\",\"method\":\"submitblock\",\"params\":[\"";
+  req += blockHex;
+  req += "\"]}";
+
+  string rep;
+  bool res = bitcoindRpcCall(bitcoindRpcAddr.c_str(), bitcoindRpcUserpass.c_str(),
+                             req.c_str(), rep);
+  LOG(INFO) << "bitcoind rpc call, rep: " << rep;
+
+  if (!res) {
+    LOG(ERROR) << "bitcoind rpc failure";
+  }
+}
+
 void NodeBoost::submitBlock(const CBlock &block) {
   // TODO: broadcast the block
-  // TODO: submit to bitcoind
-  LOG(INFO) << "NodeBoost::submitBlock: " << block.GetHash().ToString();
+
+  LOG(INFO) << "try submit block to bitcoind, blkhash: " << block.GetHash().ToString();
+  const string hex = EncodeHexBlock(block);
+  boost::thread t(boost::bind(&NodeBoost::threadSubmitBlock, this,
+                              bitcoindRpcAddr_, bitcoindRpcUserpass_, hex));
 }
 
