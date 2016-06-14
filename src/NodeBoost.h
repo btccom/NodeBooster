@@ -21,6 +21,9 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
+#ifndef NODE_BOOST_H_
+#define NODE_BOOST_H_
+
 #include "bitcoin/base58.h"
 #include "bitcoin/core.h"
 #include "bitcoin/util.h"
@@ -31,7 +34,8 @@
 #include "Utils.h"
 
 
-#define MSG_PUB_THIN_BLOCK "BLOCK_THIN"
+#define MSG_PUB_THIN_BLOCK  "BLOCK_THIN"
+#define MSG_PUB_HEARTBEAT   "HEARTBEAT"
 
 #define MSG_CMD_LEN 20
 
@@ -114,7 +118,11 @@ class NodeBoost {
   std::set<uint256> bitcoindBlockHistory_;
   std::set<uint256> zmqBroadcastHistory_;
 
+  mutex zmqPubLock_;
+  void zmqPubMessage(const string &type, zmq::message_t &zmsg);
+
   void peerCloseAll();
+  void broadcastHeartBeat();
 
   void threadZmqResponse();
   void threadListenBitcoind();
@@ -147,3 +155,4 @@ public:
   void foundNewBlock(const CBlock &block);
 };
 
+#endif

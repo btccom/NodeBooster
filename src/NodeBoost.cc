@@ -44,6 +44,7 @@ NodePeer::NodePeer(const string &subAddr, const string &reqAddr,
   zmqSub_ = new zmq::socket_t(*zmqContext, ZMQ_SUB);
   zmqSub_->connect(subAddr_);
   zmqSub_->setsockopt(ZMQ_SUBSCRIBE, MSG_PUB_THIN_BLOCK, strlen(MSG_PUB_THIN_BLOCK));
+  zmqSub_->setsockopt(ZMQ_SUBSCRIBE, MSG_PUB_HEARTBEAT,  strlen(MSG_PUB_HEARTBEAT));
 
   zmqReq_ = new zmq::socket_t(*zmqContext, ZMQ_REQ);
   zmqReq_->connect(reqAddr_);
@@ -202,6 +203,10 @@ void NodePeer::run() {
         Bin2Hex((uint8 *)content.data(), content.size(), hex);
         LOG(ERROR) << "build block failure, hex: " << hex;
       }
+    }
+    else if (type == MSG_PUB_HEARTBEAT)
+    {
+      LOG(INFO) << "received heartbeat from: " << subAddr_ << ", content: " << content;
     }
     else
     {
@@ -450,6 +455,18 @@ void NodeBoost::foundNewBlock(const CBlock &block) {
   broadcastBlock(block);
 }
 
+void NodeBoost::zmqPubMessage(const string &type, zmq::message_t &zmsg) {
+  ScopeLock sl(zmqPubLock_);
+
+  zmq::message_t ztype(type.size());
+  memcpy(ztype.data(), type.data(), type.size());
+
+  // type
+  zmqPub_->send(ztype, ZMQ_SNDMORE);
+  // content
+  zmqPub_->send(zmsg);
+}
+
 void NodeBoost::broadcastBlock(const CBlock &block) {
   {
     // broadcast only once
@@ -466,19 +483,39 @@ void NodeBoost::broadcastBlock(const CBlock &block) {
     txRepo_->AddTx(tx);
   }
 
-  // zmq broadcast
+  // broadcast thin block
   LOG(INFO) << "broadcast thin block: " << block.GetHash().ToString();
-  s_sendmore(*zmqPub_, MSG_PUB_THIN_BLOCK);  // type
   zmq::message_t zmsg;
-  _buildMsgThinBlock(block, zmsg);           // content
-  zmqPub_->send(zmsg);
+  _buildMsgThinBlock(block, zmsg);
+  zmqPubMessage(MSG_PUB_THIN_BLOCK, zmsg);
+}
+
+void NodeBoost::broadcastHeartBeat() {
+  zmq::message_t zmsg;
+  string now = date("%F %T");
+
+  zmsg.rebuild(now.size());
+  memcpy(zmsg.data(), now.data(), now.size());
+  zmqPubMessage(MSG_PUB_HEARTBEAT, zmsg);
 }
 
 void NodeBoost::run() {
   boost::thread t1(boost::bind(&NodeBoost::threadZmqResponse, this));
   boost::thread t2(boost::bind(&NodeBoost::threadListenBitcoind, this));
 
+  time_t lastHeartbeatTime = 0;
   while (running_) {
+    if (time(nullptr) > lastHeartbeatTime + 60) {
+      broadcastHeartBeat();
+      lastHeartbeatTime = time(nullptr);
+    }
+
+    sleep(1);
+  }
+
+  // wait for all peers closed
+  while (peers_.size()) {
+    LOG(INFO) << "wait for all peers to close, curr conns: " << peers_.size();
     sleep(1);
   }
 }

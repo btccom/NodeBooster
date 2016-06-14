@@ -282,3 +282,27 @@ error:
   free(chunk.memory);
   return false;
 }
+
+
+//
+// %y	Year, last two digits (00-99)	01
+// %Y	Year	2001
+// %m	Month as a decimal number (01-12)	08
+// %d	Day of the month, zero-padded (01-31)	23
+// %H	Hour in 24h format (00-23)	14
+// %I	Hour in 12h format (01-12)	02
+// %M	Minute (00-59)	55
+// %S	Second (00-61)	02
+//
+// %D	Short MM/DD/YY date, equivalent to %m/%d/%y	08/23/01
+// %F	Short YYYY-MM-DD date, equivalent to %Y-%m-%d	2001-08-23
+// %T	ISO 8601 time format (HH:MM:SS), equivalent to %H:%M:%S	14:55:02
+//
+string date(const char *format, const time_t timestamp) {
+  char buffer[80] = {0};
+  struct tm tm;
+  time_t ts = timestamp;
+  gmtime_r(&ts, &tm);
+  strftime(buffer, sizeof(buffer), format, &tm);
+  return string(buffer);
+}

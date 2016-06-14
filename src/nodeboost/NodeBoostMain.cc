@@ -21,10 +21,14 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
+#include <err.h>
+#include <errno.h>
+#include <unistd.h>
+
 #include <iostream>
-#include <iomanip>
-#include <cstdlib>
-#include <cstdio>
 
 #include <glog/logging.h>
 #include <libconfig.h++>
@@ -91,6 +95,9 @@ int main(int argc, char **argv) {
     return(EXIT_FAILURE);
   }
 
+  signal(SIGTERM, handler);
+  signal(SIGINT,  handler);
+
   TxRepo txrepo;
   gNodeBoost = new NodeBoost(cfg.lookup("server.publish_addr"),
                              cfg.lookup("server.response_addr"),
@@ -111,58 +118,6 @@ int main(int argc, char **argv) {
   }
 
   gNodeBoost->run();
-
-  return 0;
-}
-
-
-
-int main1(int argc, char **argv) {
-  // Initialize Google's logging library.
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_log_dir = "./log";
-
-  LOG(INFO) << "NodeBoost";
-
-  Config cfg;
-  // Read the file. If there is an error, report it and exit.
-  try
-  {
-    cfg.readFile("example.cfg");
-  }
-  catch(const FileIOException &fioex)
-  {
-    std::cerr << "I/O error while reading file." << std::endl;
-    return(EXIT_FAILURE);
-  }
-  catch(const ParseException &pex)
-  {
-    std::cerr << "Parse error at " << pex.getFile() << ":" << pex.getLine()
-    << " - " << pex.getError() << std::endl;
-    return(EXIT_FAILURE);
-  }
-
-  //  Prepare our context and subscriber
-  zmq::context_t context(1);
-  zmq::socket_t subscriber(context, ZMQ_SUB);
-  subscriber.connect("tcp://10.45.15.220:10000");
-  subscriber.setsockopt(ZMQ_SUBSCRIBE, "rawblock", 8);
-  subscriber.setsockopt(ZMQ_SUBSCRIBE, "rawtx",    5);
-
-  while (1) {
-    //  Read message contents
-    std::string type    = s_recv(subscriber);
-    std::string content = s_recv(subscriber);
-
-    std::cout << "[" << type << "]: " << content.length() << std::endl;
-
-    if (type == "rawtx") {
-      CTransaction tx;
-      DecodeBinTx(tx, (const unsigned char *)content.data(), content.length());
-      cout << "tx: " << tx.GetHash().ToString() << endl << EncodeHexTx(tx) << endl;
-    }
-//    std::cout << "[" << type << "]: " << content << std::endl;
-  }
 
   return 0;
 }

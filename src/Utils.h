@@ -21,6 +21,9 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
+#ifndef UTILS_H_
+#define UTILS_H_
+
 #include <string>
 #include <sstream>
 #include <vector>
@@ -54,3 +57,10 @@ bool s_sendmore (zmq::socket_t & socket, const std::string & string);
 
 bool bitcoindRpcCall(const char *url, const char *userpwd, const char *reqData,
                      string &response);
+
+string date(const char *format, const time_t timestamp);
+inline string date(const char *format) {
+  return date(format, time(nullptr));
+}
+
+#endif

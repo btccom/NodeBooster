@@ -21,6 +21,9 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
+#ifndef COMMON_H_
+#define COMMON_H_
+
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -74,3 +77,5 @@ typedef uint64_t uint64;
 typedef lock_guard<mutex> ScopeLock;
 typedef unique_lock<mutex> UniqueLock;
 typedef condition_variable Condition;
+
+#endif
