@@ -34,7 +34,10 @@
 #define MSG_PUB_THIN_BLOCK "BLOCK_THIN"
 
 #define MSG_CMD_LEN 20
-#define MSG_CMD_GET_TXS "get_txs"
+
+// cmd string's max length is 20
+#define MSG_CMD_GET_TXS       "get_txs"
+#define MSG_CMD_CONNECT_PEER  "connect_peer"
 
 
 class NodePeer;
@@ -64,7 +67,10 @@ public:
            TxRepo *txRepo);
   ~NodePeer();
 
+  void tellPeerToConnectMyServer(const string &zmqPubAddr,
+                                 const string &zmqRepAddr);
   bool isFinish();
+
   void stop();
   void run();
 };
@@ -102,18 +108,27 @@ class NodeBoost {
 
   TxRepo *txRepo_;
 
-  std::set<NodePeer *> peers_;
+  std::map<string, NodePeer *> peers_;
+
+  mutex historyLock_;
+  std::set<uint256> bitcoindBlockHistory_;
+  std::set<uint256> zmqBroadcastHistory_;
 
   void peerCloseAll();
 
-  void threadZmqPublish();
   void threadZmqResponse();
   void threadListenBitcoind();
 
   void threadPeerConnect(const string subAddr, const string reqAddr);
-  void threadSubmitBlock(const string bitcoindRpcAddr, const string bitcoindRpcUserpass, const string blockHex);
+  void threadSubmitBlock2Bitcoind(const string bitcoindRpcAddr,
+                                  const string bitcoindRpcUserpass, const string blockHex);
 
-  void buildRepGetTxs(const zmq::message_t &zin, zmq::message_t &zout);
+  void handleGetTxs  (const zmq::message_t &zin, zmq::message_t &zout);
+  void handleConnPeer(const zmq::message_t &zin);
+
+  // call by foundNewBlock()
+  void submitBlock   (const CBlock &block);
+  void broadcastBlock(const CBlock &block);
 
 public:
   NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr,
@@ -128,6 +143,7 @@ public:
 
   void run();
   void stop();
-  void submitBlock(const CBlock &block);
+
+  void foundNewBlock(const CBlock &block);
 };
 
