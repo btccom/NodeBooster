@@ -101,7 +101,9 @@ void NodePeer::tellPeerToConnectMyServer(const string &zmqPubAddr,
 
   // 2. recv response. req-rep model need to call recv().
   string smsg = s_recv(*zmqReq_);
-  DLOG(INFO) << smsg;
+//  DLOG(INFO) << smsg;
+
+  lastRecvMsgTime_ = time(nullptr);
 }
 
 bool NodePeer::isFinish() {
@@ -169,12 +171,21 @@ bool NodePeer::buildBlock(const string &thinBlock, CBlock &block) {
   return true;
 }
 
+bool NodePeer::isAlive() {
+  if (running_ && time(nullptr) < (lastRecvMsgTime_ + 120)) {
+    return true;
+  }
+  return false;
+}
+
 void NodePeer::run() {
   while (running_) {
 
     // sub
     string type    = s_recv(*zmqSub_);
     string content = s_recv(*zmqSub_);
+
+    lastRecvMsgTime_ = time(nullptr);
 
     // MSG_PUB_THIN_BLOCK
     if (type == MSG_PUB_THIN_BLOCK)
@@ -303,8 +314,6 @@ void NodeBoost::findMissingTxs(const string &thinBlock,
     p += 32;
 
     uint256 hash(vch);
-    LOG(INFO) << "check tx: " << hash.ToString();
-
     if (!txRepo_->isExist(hash)) {
       missingTxs.push_back(hash);
     }
@@ -432,7 +441,7 @@ void NodeBoost::threadListenBitcoind() {
     {
       CBlock block;
       DecodeBinBlk(block, (const unsigned char *)content.data(), content.length());
-      LOG(INFO) << "found block: " << block.GetHash().ToString()
+      LOG(INFO) << "received rawblock: " << block.GetHash().ToString()
       << ", tx count: " << block.vtx.size() << ", size: " << content.length();
 
       {
@@ -505,13 +514,27 @@ void NodeBoost::run() {
 
   time_t lastHeartbeatTime = 0;
   while (running_) {
-    if (time(nullptr) > lastHeartbeatTime + 60) {
+    if (time(nullptr) >= lastHeartbeatTime + 60) {
       broadcastHeartBeat();
       lastHeartbeatTime = time(nullptr);
     }
 
+    for (auto itr = peers_.begin(); itr != peers_.end(); ) {
+      NodePeer *p = itr->second;
+      if (p->isAlive()) {
+        ++itr;
+      } else {
+        p->stop();
+        while (p->isFinish() == false) {
+          sleep(1);
+        }
+        delete p;
+        itr = peers_.erase(itr);
+      }
+    }
+
     sleep(1);
-  }
+  } /* /while */
 
   // wait for all peers closed
   while (peers_.size()) {
@@ -552,10 +575,10 @@ void NodeBoost::peerCloseAll() {
   while (peers_.size()) {
     auto it = peers_.begin();
     NodePeer *p = it->second;
-    if (p->isFinish() == false) {
+    while (p->isFinish() == false) {
       sleep(1);
-      continue;
     }
+    delete p;
     peers_.erase(it);
   }
 }

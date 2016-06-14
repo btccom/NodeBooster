@@ -60,6 +60,8 @@ class NodePeer {
   NodeBoost *nodeBoost_;
   TxRepo *txRepo_;
 
+  atomic<time_t> lastRecvMsgTime_;
+
   void sendMissingTxs(const vector<uint256> &missingTxs);
   void recvMissingTxs();
 
@@ -74,6 +76,7 @@ public:
   void tellPeerToConnectMyServer(const string &zmqPubAddr,
                                  const string &zmqRepAddr);
   bool isFinish();
+  bool isAlive();
 
   void stop();
   void run();
