@@ -29,10 +29,22 @@
 
 #include "bitcoin/util.h"
 
+uint256 shortHash(const uint256 &hash) {
+  uint256 shortHash;
+  memcpy(shortHash.begin(), hash.begin(), SHORT_HASH_SIZE);  // copy first N bytes
+  return shortHash;
+}
+
+static
 uint256 getHashFromThinBlock(const string &thinBlock) {
   CBlockHeader header;
   memcpy((uint8_t *)&header, thinBlock.data(), sizeof(CBlockHeader));
   return header.GetHash();
+}
+
+static
+size_t getTxCountFromThinBlock(const string &thinBlock) {
+  return (thinBlock.size() - sizeof(CBlockHeader)) / SHORT_HASH_SIZE;
 }
 
 /////////////////////////////////// NodePeer ///////////////////////////////////
@@ -113,13 +125,18 @@ void NodePeer::tellPeerToConnectMyServer(const string &zmqPubAddr,
 
 void NodePeer::sendMissingTxs(const vector<uint256> &missingTxs) {
   zmq::message_t zmsg;
-  zmsg.rebuild(MSG_CMD_LEN + missingTxs.size() * 32);
+  zmsg.rebuild(MSG_CMD_LEN + missingTxs.size() * SHORT_HASH_SIZE);
 
   memset((char *)zmsg.data(), 0, MSG_CMD_LEN);
   sprintf((char *)zmsg.data(), "%s", MSG_CMD_GET_TXS);
 
-  memcpy((unsigned char *)zmsg.data() + MSG_CMD_LEN,
-         missingTxs.data(), missingTxs.size() * 32);
+  uint8_t *p = (uint8_t *)zmsg.data() + MSG_CMD_LEN;
+  for (auto txhash : missingTxs) {
+    memcpy(p, txhash.begin(), SHORT_HASH_SIZE);
+    p += SHORT_HASH_SIZE;
+  }
+  assert(p - (uint8_t *)zmsg.data() == zmsg.size());
+
   zmqReq_->send(zmsg);
 }
 
@@ -143,8 +160,8 @@ void NodePeer::recvMissingTxs() {
   }
 }
 
-bool NodePeer::buildBlock(const string &thinBlock, CBlock &block) {
-  const size_t txCnt = (thinBlock.size() - sizeof(CBlockHeader)) / 32;
+bool NodePeer::buildBlockFromThin(const string &thinBlock, CBlock &block) {
+  const size_t txCnt = getTxCountFromThinBlock(thinBlock);
   unsigned char *p = (unsigned char *)thinBlock.data() + sizeof(CBlockHeader);
 
   CBlockHeader header;
@@ -155,10 +172,10 @@ bool NodePeer::buildBlock(const string &thinBlock, CBlock &block) {
 
   // txs
   for (size_t i = 0; i < txCnt; i++) {
-    std::vector<unsigned char> vch(p, p + 32);
-    p += 32;
+    uint256 hash;
+    memcpy(hash.begin(), p, SHORT_HASH_SIZE);
+    p += SHORT_HASH_SIZE;
 
-    uint256 hash(vch);
     CTransaction tx;
     if (!txRepo_->getTx(hash, tx)) {
       LOG(FATAL) << "missing tx when build block, tx: " << hash.ToString();
@@ -202,7 +219,8 @@ void NodePeer::run() {
     {
       const uint256 blkhash = getHashFromThinBlock(content);
       LOG(INFO) << "received thin block, size: " << content.size()
-      << ", hash: " << blkhash.ToString();
+      << ", hash: " << blkhash.ToString()
+      << ", tx count: " << getTxCountFromThinBlock(content);
 
       vector<uint256> missingTxs;
       nodeBoost_->findMissingTxs(content, missingTxs);
@@ -216,7 +234,7 @@ void NodePeer::run() {
 
       // submit block
       CBlock block;
-      if (buildBlock(content, block)) {
+      if (buildBlockFromThin(content, block)) {
         assert(blkhash == block.GetHash());
         nodeBoost_->foundNewBlock(block);
       } else {
@@ -247,7 +265,6 @@ void NodePeer::run() {
   stop();  // set stop flag
 }
 
-
 //////////////////////////////////// TxRepo ////////////////////////////////////
 TxRepo::TxRepo(): lock_() {
 }
@@ -256,7 +273,9 @@ TxRepo::~TxRepo() {
 
 bool TxRepo::isExist(const uint256 &hash) {
   ScopeLock sl(lock_);
-  if (txsPool_.count(hash)) {
+
+  const uint256 shash = shortHash(hash);
+  if (txsPool_.count(shash)) {
     return true;
   }
   return false;
@@ -264,19 +283,19 @@ bool TxRepo::isExist(const uint256 &hash) {
 
 void TxRepo::AddTx(const CTransaction &tx) {
   ScopeLock sl(lock_);
-
-  const uint256 hash = tx.GetHash();
-  if (txsPool_.count(hash)) {
+  const uint256 shash = shortHash(tx.GetHash());
+  if (txsPool_.count(shash)) {
     return;
   }
-  txsPool_.insert(std::make_pair(hash, tx));
+  txsPool_.insert(std::make_pair(shash, tx));
 //  LOG(INFO) << "tx repo add tx: " << hash.ToString();
 }
 
 bool TxRepo::getTx(const uint256 &hash, CTransaction &tx) {
   ScopeLock sl(lock_);
 
-  auto it = txsPool_.find(hash);
+  const uint256 shash = shortHash(hash);
+  auto it = txsPool_.find(shash);
   if (it == txsPool_.end()) {
     return false;
   }
@@ -323,13 +342,13 @@ void NodeBoost::findMissingTxs(const string &thinBlock,
 
   uint8_t *p = (uint8_t *)thinBlock.data() + kHeaderSize;
   uint8_t *e = (uint8_t *)thinBlock.data() + thinBlock.size();
-  assert((e - p) % 32 == 0);
+  assert((e - p) % SHORT_HASH_SIZE == 0);
 
   while (p < e) {
-    std::vector<unsigned char> vch(p, p + 32);
-    p += 32;
+    uint256 hash;
+    memcpy(hash.begin(), p, SHORT_HASH_SIZE);
+    p += SHORT_HASH_SIZE;
 
-    uint256 hash(vch);
     if (!txRepo_->isExist(hash)) {
       missingTxs.push_back(hash);
     }
@@ -339,16 +358,16 @@ void NodeBoost::findMissingTxs(const string &thinBlock,
 void NodeBoost::handleGetTxs(const zmq::message_t &zin, zmq::message_t &zout) {
   uint8_t *p = (uint8_t *)zin.data() + MSG_CMD_LEN;
   uint8_t *e = (uint8_t *)zin.data() + zin.size();
-  assert((e - p) % 32 == 0);
+  assert((e - p) % SHORT_HASH_SIZE == 0);
 
   zmq::message_t ztmp(4*1024*1024);  // 4MB, TODO: resize in the future
   uint8_t *data = (uint8_t *)ztmp.data();
 
   while (p < e) {
-    std::vector<unsigned char> vch(p, p + 32);
-    p += 32;
+    uint256 hash;
+    memcpy(hash.begin(), p, SHORT_HASH_SIZE);
+    p += SHORT_HASH_SIZE;
 
-    uint256 hash(vch);
     CTransaction tx;
     if (!txRepo_->getTx(hash, tx)) {
       LOG(INFO) << "missing tx: " << hash.ToString();
@@ -432,7 +451,7 @@ static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
   const size_t kHeaderSize = 80;
   assert(kHeaderSize == sizeof(CBlockHeader));
 
-  zmsg.rebuild(kHeaderSize + block.vtx.size() * 32);
+  zmsg.rebuild(kHeaderSize + block.vtx.size() * SHORT_HASH_SIZE);
   unsigned char *p = (unsigned char *)zmsg.data();
 
   CBlockHeader header = block.GetBlockHeader();
@@ -441,8 +460,8 @@ static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
 
   for (size_t i = 0; i < block.vtx.size(); i++) {
     uint256 hash = block.vtx[i].GetHash();
-    memcpy(p, hash.begin(), 32);
-    p += 32;
+    memcpy(p, hash.begin(), SHORT_HASH_SIZE);
+    p += SHORT_HASH_SIZE;
   }
 }
 
@@ -454,8 +473,20 @@ void NodeBoost::threadListenBitcoind() {
 
   LOG(INFO) << "start thread listen to bitcoind";
   while (running_) {
-    std::string type    = s_recv(subscriber);
-    std::string content = s_recv(subscriber);
+    zmq::message_t ztype, zcontent;
+    try {
+      if (subscriber.recv(&ztype, ZMQ_DONTWAIT) == false) {
+        if (!running_) { break; }
+        usleep(50000);  // so we sleep and try again
+        continue;
+      }
+      subscriber.recv(&zcontent);
+    } catch (std::exception & e) {
+      LOG(ERROR) << "bitcoind zmq recv exception: " << e.what();
+      break;  // break big while
+    }
+    const string type    = std::string(static_cast<char*>(ztype.data()),    ztype.size());
+    const string content = std::string(static_cast<char*>(zcontent.data()), zcontent.size());
 
     if (type == "rawtx") {
       CTransaction tx;

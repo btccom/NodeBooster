@@ -44,10 +44,17 @@
 #define MSG_CMD_GET_TXS       "get_txs"
 #define MSG_CMD_CONNECT_PEER  "connect_peer"
 
+//
+// use short hash to save space
+// https://en.wikipedia.org/wiki/Birthday_attack
+// 8 bytes -> 64 bits
+#define SHORT_HASH_SIZE 8
 
 class NodePeer;
 class TxRepo;
 class NodeBoost;
+
+uint256 shortHash(const uint256 &hash);
 
 /////////////////////////////////// NodePeer ///////////////////////////////////
 class NodePeer {
@@ -66,7 +73,7 @@ class NodePeer {
   void sendMissingTxs(const vector<uint256> &missingTxs);
   void recvMissingTxs();
 
-  bool buildBlock(const string &thinBlock, CBlock &block);
+  bool buildBlockFromThin(const string &thinBlock, CBlock &block);
 
 public:
   NodePeer(const string &subAddr, const string &reqAddr,
