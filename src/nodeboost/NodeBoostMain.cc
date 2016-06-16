@@ -106,18 +106,26 @@ int main(int argc, char **argv) {
                              cfg.lookup("bitcoind.rpc_userpwd"),
                              &txrepo);
 
-  // connect peers
-  {
-    const Setting &peers = cfg.lookup("peers");
-    for (int i = 0; i < peers.getLength(); i++) {
-      string subAddr, reqAddr;
-      peers[i].lookupValue("publish_addr",  subAddr);
-      peers[i].lookupValue("response_addr", reqAddr);
-      gNodeBoost->peerConnect(subAddr, reqAddr);
+  try {
+    // connect peers in config file
+    {
+      const Setting &peers = cfg.lookup("peers");
+      for (int i = 0; i < peers.getLength(); i++) {
+        string subAddr, reqAddr;
+        peers[i].lookupValue("publish_addr",  subAddr);
+        peers[i].lookupValue("response_addr", reqAddr);
+        gNodeBoost->peerConnect(subAddr, reqAddr);
+      }
     }
-  }
 
-  gNodeBoost->run();
+    gNodeBoost->run();
+
+    gNodeBoost->stop();
+    delete gNodeBoost;
+  } catch (std::exception & e) {
+    LOG(FATAL) << "exception: " << e.what();
+    return 1;
+  }
 
   return 0;
 }

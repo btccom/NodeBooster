@@ -45,6 +45,7 @@ NodePeer::NodePeer(const string &subAddr, const string &reqAddr,
   zmqSub_->connect(subAddr_);
   zmqSub_->setsockopt(ZMQ_SUBSCRIBE, MSG_PUB_THIN_BLOCK, strlen(MSG_PUB_THIN_BLOCK));
   zmqSub_->setsockopt(ZMQ_SUBSCRIBE, MSG_PUB_HEARTBEAT,  strlen(MSG_PUB_HEARTBEAT));
+  zmqSub_->setsockopt(ZMQ_SUBSCRIBE, MSG_PUB_CLOSEPEER,  strlen(MSG_PUB_CLOSEPEER));
 
   zmqReq_ = new zmq::socket_t(*zmqContext, ZMQ_REQ);
   zmqReq_->connect(reqAddr_);
@@ -52,10 +53,14 @@ NodePeer::NodePeer(const string &subAddr, const string &reqAddr,
   int zmqLinger = 5 * 1000;
   zmqSub_->setsockopt(ZMQ_LINGER, &zmqLinger/*ms*/, sizeof(zmqLinger));
   zmqReq_->setsockopt(ZMQ_LINGER, &zmqLinger/*ms*/, sizeof(zmqLinger));
+
+  lastRecvMsgTime_ = time(nullptr);
 }
 
 NodePeer::~NodePeer() {
   LOG(INFO) << "close peer: " << subAddr_ << ", " << reqAddr_;
+  zmqSub_ = nullptr;
+  zmqReq_ = nullptr;
 }
 
 void NodePeer::stop() {
@@ -65,10 +70,10 @@ void NodePeer::stop() {
   running_ = false;
 
   LOG(INFO) << "stop peer: " << subAddr_ << ", " << reqAddr_;
-  zmqSub_->close();
-  zmqReq_->close();
-  zmqSub_ = nullptr;
-  zmqReq_ = nullptr;
+}
+
+string NodePeer::toString() const {
+  return "peer(sub: " + subAddr_ + ", req: " + reqAddr_ + ")";
 }
 
 void NodePeer::tellPeerToConnectMyServer(const string &zmqPubAddr,
@@ -104,13 +109,6 @@ void NodePeer::tellPeerToConnectMyServer(const string &zmqPubAddr,
 //  DLOG(INFO) << smsg;
 
   lastRecvMsgTime_ = time(nullptr);
-}
-
-bool NodePeer::isFinish() {
-  if (running_ == false && zmqSub_ == nullptr && zmqReq_ == nullptr) {
-    return true;
-  }
-  return false;
 }
 
 void NodePeer::sendMissingTxs(const vector<uint256> &missingTxs) {
@@ -172,7 +170,7 @@ bool NodePeer::buildBlock(const string &thinBlock, CBlock &block) {
 }
 
 bool NodePeer::isAlive() {
-  if (running_ && time(nullptr) < (lastRecvMsgTime_ + 120)) {
+  if (running_ && (lastRecvMsgTime_ + 120) > time(nullptr)) {
     return true;
   }
   return false;
@@ -182,8 +180,20 @@ void NodePeer::run() {
   while (running_) {
 
     // sub
-    string type    = s_recv(*zmqSub_);
-    string content = s_recv(*zmqSub_);
+    zmq::message_t ztype, zcontent;
+    try {
+      if (zmqSub_->recv(&ztype, ZMQ_DONTWAIT) == false) {
+        if (!running_) { break; }
+        usleep(50000);  // so we sleep and try again
+        continue;
+      }
+      zmqSub_->recv(&zcontent);
+    } catch (std::exception & e) {
+      LOG(ERROR) << "node peer recv exception: " << e.what();
+      break;  // break big while
+    }
+    const string type    = std::string(static_cast<char*>(ztype.data()),    ztype.size());
+    const string content = std::string(static_cast<char*>(zcontent.data()), zcontent.size());
 
     lastRecvMsgTime_ = time(nullptr);
 
@@ -219,12 +229,22 @@ void NodePeer::run() {
     {
       LOG(INFO) << "received heartbeat from: " << subAddr_ << ", content: " << content;
     }
+    else if (type == MSG_PUB_CLOSEPEER)
+    {
+      LOG(INFO) << "received close_peer from: " << subAddr_ << ", content: " << content;
+      break;  // break big while
+    }
     else
     {
       LOG(ERROR) << "unknown message type: " << type;
     }
 
   } /* /while */
+
+  zmqSub_->close();
+  zmqReq_->close();
+
+  stop();  // set stop flag
 }
 
 
@@ -284,8 +304,6 @@ bitcoindRpcAddr_(bitcoindRpcAddr), bitcoindRpcUserpass_(bitcoindRpcUserpass)
 }
 
 NodeBoost::~NodeBoost() {
-  zmqRep_->close();
-  zmqPub_->close();
   zmqRep_ = nullptr;
   zmqPub_ = nullptr;
 }
@@ -295,8 +313,6 @@ void NodeBoost::stop() {
     return;
   }
   running_ = false;
-
-  peerCloseAll();
 }
 
 void NodeBoost::findMissingTxs(const string &thinBlock,
@@ -374,9 +390,16 @@ void NodeBoost::handleConnPeer(const zmq::message_t &zin) {
 }
 
 void NodeBoost::threadZmqResponse() {
+  LOG(INFO) << "start thread zmq response";
+
   while (running_) {
     zmq::message_t zmsg;
-    zmqRep_->recv(&zmsg);
+    // false meaning non-block, read nothing
+    if (zmqRep_->recv(&zmsg, ZMQ_DONTWAIT) == false) {
+      if (!running_) { break; }
+      usleep(50000);  // so we sleep and try again
+      continue;
+    }
     assert(zmsg.size() >= MSG_CMD_LEN);
 
     // cmd
@@ -402,6 +425,7 @@ void NodeBoost::threadZmqResponse() {
       LOG(ERROR) << "unknown cmd: " << cmd;
     }
   }
+  LOG(INFO) << "stop thread zmq response";
 }
 
 static void _buildMsgThinBlock(const CBlock &block, zmq::message_t &zmsg) {
@@ -428,6 +452,7 @@ void NodeBoost::threadListenBitcoind() {
   subscriber.setsockopt(ZMQ_SUBSCRIBE, "rawblock", 8);
   subscriber.setsockopt(ZMQ_SUBSCRIBE, "rawtx",    5);
 
+  LOG(INFO) << "start thread listen to bitcoind";
   while (running_) {
     std::string type    = s_recv(subscriber);
     std::string content = s_recv(subscriber);
@@ -456,7 +481,9 @@ void NodeBoost::threadListenBitcoind() {
       LOG(ERROR) << "unknown message type from bitcoind: " << type;
     }
   } /* /while */
+
   subscriber.close();
+  LOG(INFO) << "stop thread listen to bitcoind";
 }
 
 void NodeBoost::foundNewBlock(const CBlock &block) {
@@ -508,9 +535,18 @@ void NodeBoost::broadcastHeartBeat() {
   zmqPubMessage(MSG_PUB_HEARTBEAT, zmsg);
 }
 
+void NodeBoost::broadcastClosePeer() {
+  zmq::message_t zmsg;
+  string now = date("%F %T");
+
+  zmsg.rebuild(now.size());
+  memcpy(zmsg.data(), now.data(), now.size());
+  zmqPubMessage(MSG_PUB_CLOSEPEER, zmsg);
+}
+
 void NodeBoost::run() {
-  boost::thread t1(boost::bind(&NodeBoost::threadZmqResponse, this));
-  boost::thread t2(boost::bind(&NodeBoost::threadListenBitcoind, this));
+  threadZmqResponse_    = thread(&NodeBoost::threadZmqResponse,    this);
+  threadListenBitcoind_ = thread(&NodeBoost::threadListenBitcoind, this);
 
   time_t lastHeartbeatTime = 0;
   while (running_) {
@@ -519,32 +555,48 @@ void NodeBoost::run() {
       lastHeartbeatTime = time(nullptr);
     }
 
+    // check peer and delete dead ones
     for (auto itr = peers_.begin(); itr != peers_.end(); ) {
       NodePeer *p = itr->second;
       if (p->isAlive()) {
         ++itr;
-      } else {
-        p->stop();
-        while (p->isFinish() == false) {
-          sleep(1);
-        }
-        delete p;
-        itr = peers_.erase(itr);
+        continue;
       }
+
+      // delete dead
+      LOG(INFO) << "clear dead peer: " << p->toString();
+      p->stop();
+      thread *t = peersThreads_[itr->first];
+      if (t->joinable()) {
+        t->join();
+      }
+      delete t;
+      delete p;
+      peersThreads_.erase(itr->first);
+      itr = peers_.erase(itr);
     }
 
     sleep(1);
   } /* /while */
 
-  // wait for all peers closed
-  while (peers_.size()) {
-    LOG(INFO) << "wait for all peers to close, curr conns: " << peers_.size();
-    sleep(1);
-  }
+  broadcastClosePeer();
+  sleep(1);
+
+  if (threadListenBitcoind_.joinable())
+    threadListenBitcoind_.join();
+
+  if (threadZmqResponse_.joinable())
+    threadZmqResponse_.join();
+
+  zmqRep_->close();
+  zmqPub_->close();
+
+  peerCloseAll();
 }
 
 void NodeBoost::peerConnect(const string &subAddr, const string &reqAddr) {
-  boost::thread t(boost::bind(&NodeBoost::threadPeerConnect,  this, subAddr, reqAddr));
+  const string pKey = subAddr + "|" + reqAddr;
+  peersThreads_[pKey] = new thread(&NodeBoost::threadPeerConnect, this, subAddr, reqAddr);
 }
 
 void NodeBoost::threadPeerConnect(const string subAddr, const string reqAddr) {
@@ -571,16 +623,25 @@ void NodeBoost::peerCloseAll() {
   for (auto it : peers_) {
     it.second->stop();
   }
+  sleep(1);
+
+  for (auto it : peersThreads_) {
+    if (it.second->joinable()) {
+      it.second->join();
+    }
+  }
 
   while (peers_.size()) {
     auto it = peers_.begin();
-    NodePeer *p = it->second;
-    while (p->isFinish() == false) {
-      sleep(1);
-    }
-    delete p;
+
+    delete peersThreads_[it->first];  // thread *
+    delete it->second;                // NodePeer *
+
+    peersThreads_.erase(it->first);
     peers_.erase(it);
   }
+  assert(peers_.size() == 0);
+  assert(peersThreads_.size() == 0);
 }
 
 void NodeBoost::threadSubmitBlock2Bitcoind(const string bitcoindRpcAddr,

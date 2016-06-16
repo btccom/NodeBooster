@@ -33,9 +33,10 @@
 #include "Common.h"
 #include "Utils.h"
 
-
+// publish message
 #define MSG_PUB_THIN_BLOCK  "BLOCK_THIN"
 #define MSG_PUB_HEARTBEAT   "HEARTBEAT"
+#define MSG_PUB_CLOSEPEER   "CLOSE_PEER"
 
 #define MSG_CMD_LEN 20
 
@@ -75,8 +76,8 @@ public:
 
   void tellPeerToConnectMyServer(const string &zmqPubAddr,
                                  const string &zmqRepAddr);
-  bool isFinish();
   bool isAlive();
+  string toString() const;
 
   void stop();
   void run();
@@ -116,16 +117,21 @@ class NodeBoost {
   TxRepo *txRepo_;
 
   std::map<string, NodePeer *> peers_;
+  std::map<string, thread *> peersThreads_;
 
   mutex historyLock_;
   std::set<uint256> bitcoindBlockHistory_;
   std::set<uint256> zmqBroadcastHistory_;
+
+  thread threadZmqResponse_;
+  thread threadListenBitcoind_;
 
   mutex zmqPubLock_;
   void zmqPubMessage(const string &type, zmq::message_t &zmsg);
 
   void peerCloseAll();
   void broadcastHeartBeat();
+  void broadcastClosePeer();
 
   void threadZmqResponse();
   void threadListenBitcoind();
