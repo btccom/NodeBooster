@@ -72,6 +72,7 @@ class NodePeer {
 
   void sendMissingTxs(const vector<uint256> &missingTxs);
   void recvMissingTxs();
+  void handleMsgThinBlock(const string &thinBlock);
 
   bool buildBlockFromThin(const string &thinBlock, CBlock &block);
 
@@ -103,6 +104,7 @@ public:
   bool isExist(const uint256 &hash);
   bool getTx(const uint256 &hash, CTransaction &tx);
   void AddTx(const CTransaction &tx);
+  void DelTx(const uint256 &hash);
 };
 
 
@@ -127,8 +129,8 @@ class NodeBoost {
   std::map<string, thread *> peersThreads_;
 
   mutex historyLock_;
-  std::set<uint256> bitcoindBlockHistory_;
-  std::set<uint256> zmqBroadcastHistory_;
+  std::set<uint256> blockHistory_;
+  std::deque<CBlock> blocksQ_;
 
   thread threadZmqResponse_;
   thread threadListenBitcoind_;
@@ -151,7 +153,7 @@ class NodeBoost {
   void handleConnPeer(const zmq::message_t &zin);
 
   // call by foundNewBlock()
-  void submitBlock   (const CBlock &block);
+  void submitBlock2Bitcoind(const CBlock &block);
   void broadcastBlock(const CBlock &block);
 
 public:
@@ -168,7 +170,8 @@ public:
   void run();
   void stop();
 
-  void foundNewBlock(const CBlock &block);
+  void foundNewBlock(const CBlock &block, bool isFoundByBitcoind);
+  bool isExistBlock(const uint256 &hash);
 };
 
 #endif

@@ -193,6 +193,39 @@ bool NodePeer::isAlive() {
   return false;
 }
 
+void NodePeer::handleMsgThinBlock(const string &thinBlock) {
+  const uint256 blkhash = getHashFromThinBlock(thinBlock);
+  LOG(INFO) << "received thin block, size: " << thinBlock.size()
+  << ", hash: " << blkhash.ToString()
+  << ", tx count: " << getTxCountFromThinBlock(thinBlock);
+
+  if (nodeBoost_->isExistBlock(blkhash)) {
+    LOG(INFO) << "ingore thin block, already exist";
+    return;
+  }
+
+  vector<uint256> missingTxs;
+  nodeBoost_->findMissingTxs(thinBlock, missingTxs);
+
+  if (missingTxs.size() > 0) {
+    LOG(INFO) << "request 'get_txs', missing tx count: " << missingTxs.size();
+    // send cmd: "get_txs"
+    sendMissingTxs(missingTxs);
+    recvMissingTxs();
+  }
+
+  // submit block
+  CBlock block;
+  if (!buildBlockFromThin(thinBlock, block)) {
+    string hex;
+    Bin2Hex((uint8 *)thinBlock.data(), thinBlock.size(), hex);
+    LOG(ERROR) << "build block failure, hex: " << hex;
+  }
+
+  assert(blkhash == block.GetHash());
+  nodeBoost_->foundNewBlock(block, false/* not found by bitcoind*/);
+}
+
 void NodePeer::run() {
   while (running_) {
 
@@ -217,31 +250,7 @@ void NodePeer::run() {
     // MSG_PUB_THIN_BLOCK
     if (type == MSG_PUB_THIN_BLOCK)
     {
-      const uint256 blkhash = getHashFromThinBlock(content);
-      LOG(INFO) << "received thin block, size: " << content.size()
-      << ", hash: " << blkhash.ToString()
-      << ", tx count: " << getTxCountFromThinBlock(content);
-
-      vector<uint256> missingTxs;
-      nodeBoost_->findMissingTxs(content, missingTxs);
-
-      if (missingTxs.size() > 0) {
-        LOG(INFO) << "request 'get_txs', missing tx count: " << missingTxs.size();
-        // send cmd: "get_txs"
-        sendMissingTxs(missingTxs);
-        recvMissingTxs();
-      }
-
-      // submit block
-      CBlock block;
-      if (buildBlockFromThin(content, block)) {
-        assert(blkhash == block.GetHash());
-        nodeBoost_->foundNewBlock(block);
-      } else {
-        string hex;
-        Bin2Hex((uint8 *)content.data(), content.size(), hex);
-        LOG(ERROR) << "build block failure, hex: " << hex;
-      }
+      handleMsgThinBlock(content);
     }
     else if (type == MSG_PUB_HEARTBEAT)
     {
@@ -301,6 +310,12 @@ bool TxRepo::getTx(const uint256 &hash, CTransaction &tx) {
   }
   tx = it->second;
   return true;
+}
+
+void TxRepo::DelTx(const uint256 &hash) {
+  ScopeLock sl(lock_);
+  const uint256 shash = shortHash(hash);
+  txsPool_.erase(shash);
 }
 
 
@@ -500,12 +515,7 @@ void NodeBoost::threadListenBitcoind() {
       LOG(INFO) << "received rawblock: " << block.GetHash().ToString()
       << ", tx count: " << block.vtx.size() << ", size: " << content.length();
 
-      {
-        // don't submit block to the bitcoind self
-        ScopeLock sl(historyLock_);
-        bitcoindBlockHistory_.insert(block.GetHash());
-      }
-      foundNewBlock(block);
+      foundNewBlock(block, true/* found by bitcoind */);
     }
     else
     {
@@ -517,9 +527,40 @@ void NodeBoost::threadListenBitcoind() {
   LOG(INFO) << "stop thread listen to bitcoind";
 }
 
-void NodeBoost::foundNewBlock(const CBlock &block) {
-  submitBlock(block);  // using thread, none-block
+void NodeBoost::foundNewBlock(const CBlock &block, bool isFoundByBitcoind) {
+  {
+    ScopeLock sl(historyLock_);
+    const uint256 hash = block.GetHash();
+    if (blockHistory_.count(hash)) {
+      LOG(INFO) << "block has bend found, ingore it: " << hash.ToString();
+      return;  // already has been processed
+    }
+    blockHistory_.insert(block.GetHash());
+  }
+
+  if (!isFoundByBitcoind) {
+    submitBlock2Bitcoind(block);  // using thread, none-block
+  }
   broadcastBlock(block);
+
+  // clear old block & txs
+  blocksQ_.push_back(block);
+  while (blocksQ_.size() > 4) {
+    auto itr = blocksQ_.begin();
+    LOG(INFO) << "clear block & txs, blkhash: " << (*itr).GetHash().ToString();
+    for (auto tx : (*itr).vtx) {
+      txRepo_->DelTx(tx.GetHash());
+    }
+    blocksQ_.pop_front();
+  }
+}
+
+bool NodeBoost::isExistBlock(const uint256 &hash) {
+  ScopeLock sl(historyLock_);
+  if (blockHistory_.count(hash)) {
+    return true;  // already has been processed
+  }
+  return false;
 }
 
 void NodeBoost::zmqPubMessage(const string &type, zmq::message_t &zmsg) {
@@ -535,16 +576,6 @@ void NodeBoost::zmqPubMessage(const string &type, zmq::message_t &zmsg) {
 }
 
 void NodeBoost::broadcastBlock(const CBlock &block) {
-  {
-    // broadcast only once
-    ScopeLock sl(historyLock_);
-    if (zmqBroadcastHistory_.count(block.GetHash()) != 0) {
-      LOG(INFO) << "block has already broadcasted: " << block.GetHash().ToString();
-      return;
-    }
-    zmqBroadcastHistory_.insert(block.GetHash());
-  }
-
   // add to txs repo
   for (auto tx : block.vtx) {
     txRepo_->AddTx(tx);
@@ -693,17 +724,7 @@ void NodeBoost::threadSubmitBlock2Bitcoind(const string bitcoindRpcAddr,
   }
 }
 
-void NodeBoost::submitBlock(const CBlock &block) {
-  {
-    // submit only once
-    ScopeLock sl(historyLock_);
-    if (bitcoindBlockHistory_.count(block.GetHash()) != 0) {
-      LOG(INFO) << "block has already submitted to bitcoind: " << block.GetHash().ToString();
-      return;
-    }
-    bitcoindBlockHistory_.insert(block.GetHash());
-  }
-
+void NodeBoost::submitBlock2Bitcoind(const CBlock &block) {
   // use thread to submit block, none-block
   LOG(INFO) << "submit block to bitcoind, blkhash: " << block.GetHash().ToString();
   const string hex = EncodeHexBlock(block);
