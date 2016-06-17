@@ -318,6 +318,11 @@ void TxRepo::DelTx(const uint256 &hash) {
   txsPool_.erase(shash);
 }
 
+size_t TxRepo::size() {
+  ScopeLock sl(lock_);
+  return txsPool_.size();
+}
+
 
 //////////////////////////////////// NodeBoost ////////////////////////////////////
 NodeBoost::NodeBoost(const string &zmqPubAddr, const string &zmqRepAddr,
@@ -548,10 +553,14 @@ void NodeBoost::foundNewBlock(const CBlock &block, bool isFoundByBitcoind) {
   while (blocksQ_.size() > 4) {
     auto itr = blocksQ_.begin();
     LOG(INFO) << "clear block & txs, blkhash: " << (*itr).GetHash().ToString();
+    size_t txCnt1 = txRepo_->size();
+
     for (auto tx : (*itr).vtx) {
       txRepo_->DelTx(tx.GetHash());
     }
     blocksQ_.pop_front();
+
+    LOG(INFO) << "txs count: " << txCnt1 << " -> " << txRepo_->size();
   }
 }
 

@@ -105,6 +105,7 @@ public:
   bool getTx(const uint256 &hash, CTransaction &tx);
   void AddTx(const CTransaction &tx);
   void DelTx(const uint256 &hash);
+  size_t size();
 };
 
 
