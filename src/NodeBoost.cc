@@ -737,7 +737,7 @@ void NodeBoost::submitBlock2Bitcoind(const CBlock &block) {
   // use thread to submit block, none-block
   LOG(INFO) << "submit block to bitcoind, blkhash: " << block.GetHash().ToString();
   const string hex = EncodeHexBlock(block);
-  boost::thread t(boost::bind(&NodeBoost::threadSubmitBlock2Bitcoind, this,
-                              bitcoindRpcAddr_, bitcoindRpcUserpass_, hex));
+  thread t(&NodeBoost::threadSubmitBlock2Bitcoind, this,
+           bitcoindRpcAddr_, bitcoindRpcUserpass_, hex);
 }
 
