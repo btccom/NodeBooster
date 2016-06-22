@@ -21,8 +21,6 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
-
-#include <boost/thread.hpp>
 #include <glog/logging.h>
 
 #include "NodeBoost.h"
@@ -254,7 +252,7 @@ void NodePeer::run() {
     }
     else if (type == MSG_PUB_HEARTBEAT)
     {
-      LOG(INFO) << "received heartbeat from: " << subAddr_ << ", content: " << content;
+      // do nothing
     }
     else if (type == MSG_PUB_CLOSEPEER)
     {

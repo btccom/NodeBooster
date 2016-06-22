@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# run script for supervise
+# @since 2016-06
+#
+/root/NodeBooster/build/nodeboost -c /root/nodebooster_run_dir/nodenodeboost.cfg -l /root/nodebooster_run_dir/log

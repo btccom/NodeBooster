@@ -14,7 +14,7 @@ CMD ["/sbin/my_init"]
 
 RUN apt-get update
 RUN apt-get install -y zsh git cmake build-essential wget
-RUN apt-get install -y openssl libssl-dev libcurl4-openssl-dev libzmq3-dev libconfig++-dev
+RUN apt-get install -y openssl libssl-dev libcurl4-openssl-dev libzmq3-dev libconfig++-dev libboost-all-dev
 
 # oh my zsh
 ADD oh-my-zsh.tar.gz /root/oh-my-zsh.tar.gz
@@ -30,8 +30,6 @@ RUN cd /root/source \
   && cd glog-0.3.4 \
   && ./configure && make && make install
 
-RUN apt-get install -y libboost-all-dev
-
 # build
 RUN cd /root \
   && git clone https://github.com/btccom/NodeBooster.git \
@@ -42,3 +40,8 @@ RUN cd /root \
   && cmake ..\
   && make
 
+# daemon
+RUN mkdir -p /root/nodebooster_run_dir/log
+RUN mkdir /etc/service/nodebooster
+ADD run /etc/service/nodebooster/run
+RUN chmod +x /etc/service/nodebooster/run

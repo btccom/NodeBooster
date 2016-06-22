@@ -79,7 +79,9 @@ int main(int argc, char **argv) {
   // Initialize Google's logging library.
   google::InitGoogleLogging(argv[0]);
   FLAGS_log_dir = string(optLogDir);
+  FLAGS_max_log_size = 100;  // max log file size 100 MB
   FLAGS_logbuflevel = -1;
+  FLAGS_stop_logging_if_full_disk = true;
 
   // Read the file. If there is an error, report it and exit.
   Config cfg;
@@ -127,5 +129,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  google::ShutdownGoogleLogging();
   return 0;
 }
